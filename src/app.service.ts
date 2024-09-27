@@ -1,143 +1,151 @@
 import { Injectable } from '@nestjs/common';
-import { spawn } from 'child_process';
+import { ChildProcess, spawn } from 'child_process';
 import { v4 as uuidv4 } from 'uuid';
 import * as path from 'path';
 import * as os from 'os';
 
+export interface HLSJobStatus {
+  status: 'running' | 'completed' | 'failed' | 'cancelled';
+  progress: number;
+  outputPath: string;
+}
+
 @Injectable()
 export class AppService {
-  private activeJobs: Map<string, { process: any; status: string }> = new Map();
+  private activeHLSJobs: Map<string, HLSJobStatus> = new Map();
+  private ffmpegProcesses: Map<string, ChildProcess> = new Map();
 
   private isAppleSilicon(): boolean {
     return os.platform() === 'darwin' && os.arch() === 'arm64';
   }
 
-  getHello(): string {
-    return 'Hello World!';
+  private isIntelQuickSyncAvailable(): boolean {
+    // This is a simplified check. In a real-world scenario, you might want to use
+    // a more robust method to detect QuickSync availability.
+    return os.platform() === 'linux' && process.env.USE_QUICK_SYNC === 'true';
   }
 
-  async startTranscodingJob(filePath: string, id: string): Promise<string> {
+  async downloadAndCombineHLS(hlsUrl: string): Promise<string> {
     const jobId = uuidv4();
-    const useQuickSync = process.env.USE_QUICK_SYNC === 'true';
-    const isAppleSilicon = this.isAppleSilicon();
-
-    const dir = path.dirname(filePath);
-    const name = path.basename(filePath, path.extname(filePath));
-    const outputPath = path.join(dir, `${name}_optimized_${id}.mp4`);
-
-    const commonArgs = [
-      '-i',
-      filePath,
-      '-vf',
-      "scale='min(1280,iw)':'-2'",
-      '-c:a',
-      'aac',
-      '-b:a',
-      '128k',
-      '-ac',
-      '2',
-      '-movflags',
-      '+faststart',
-      '-metadata',
-      'title=',
-      '-metadata',
-      'comment=',
-      '-max_muxing_queue_size',
-      '9999',
-    ];
+    const outputPath = path.join(os.tmpdir(), `combined_${jobId}.mp4`);
 
     let ffmpegArgs: string[];
 
-    if (isAppleSilicon) {
+    if (this.isAppleSilicon()) {
+      // Apple Silicon (M1/M2) configuration
       ffmpegArgs = [
-        ...commonArgs,
+        '-i',
+        hlsUrl,
         '-c:v',
-        'h264_videotoolbox',
-        '-b:v',
-        '2M',
-        '-maxrate',
-        '2.5M',
-        '-bufsize',
-        '5M',
-        '-tag:v',
-        'avc1',
-        '-profile:v',
-        'main',
-        '-level',
-        '3.1',
+        'h264_videotoolbox', // Use VideoToolbox for hardware acceleration
+        '-preset',
+        'fast',
+        '-c:a',
+        'copy',
+        '-bsf:a',
+        'aac_adtstoasc',
         outputPath,
       ];
-    } else if (useQuickSync) {
+    } else if (this.isIntelQuickSyncAvailable()) {
+      // Intel QuickSync configuration
       ffmpegArgs = [
-        '-hwaccel',
-        'qsv',
-        ...commonArgs,
+        '-i',
+        hlsUrl,
         '-c:v',
-        'h264_qsv',
+        'h264_qsv', // Use QuickSync for hardware acceleration
         '-preset',
-        'veryfast',
-        '-b:v',
-        '2M',
-        '-maxrate',
-        '2.5M',
-        '-bufsize',
-        '5M',
-        '-profile:v',
-        'main',
-        '-level',
-        '3.1',
+        'fast',
+        '-c:a',
+        'copy',
+        '-bsf:a',
+        'aac_adtstoasc',
         outputPath,
       ];
     } else {
+      // Default configuration (software encoding)
       ffmpegArgs = [
-        ...commonArgs,
-        '-c:v',
-        'libx264',
-        '-preset',
-        'veryfast',
-        '-crf',
-        '23',
-        '-profile:v',
-        'main',
-        '-level',
-        '3.1',
-        '-tune',
-        'fastdecode,zerolatency',
+        '-i',
+        hlsUrl,
+        '-c',
+        'copy',
+        '-bsf:a',
+        'aac_adtstoasc',
         outputPath,
       ];
     }
 
-    const ffmpegProcess = spawn('ffmpeg', ffmpegArgs);
+    this.activeHLSJobs.set(jobId, {
+      status: 'running',
+      progress: 0,
+      outputPath,
+    });
 
-    this.activeJobs.set(jobId, { process: ffmpegProcess, status: 'running' });
+    // Start the FFmpeg process in the background
+    this.startFFmpegProcess(jobId, ffmpegArgs);
+
+    // Immediately return the job ID
+    return jobId;
+  }
+
+  private startFFmpegProcess(jobId: string, ffmpegArgs: string[]): void {
+    const ffmpegProcess = spawn('ffmpeg', ffmpegArgs);
+    this.ffmpegProcesses.set(jobId, ffmpegProcess);
 
     ffmpegProcess.stdout.on('data', (data) => {
-      console.log(`[${jobId}] stdout: ${data}`);
+      console.log(`stdout: ${data}`);
     });
 
     ffmpegProcess.stderr.on('data', (data) => {
-      console.error(`[${jobId}] stderr: ${data}`);
+      console.error(`stderr: ${data}`);
+      const progressMatch = data
+        .toString()
+        .match(/time=(\d{2}):(\d{2}):(\d{2})\.\d{2}/);
+      if (progressMatch) {
+        const [, hours, minutes, seconds] = progressMatch;
+        const currentTime =
+          parseInt(hours) * 3600 + parseInt(minutes) * 60 + parseInt(seconds);
+        // Assume 1 hour duration for simplicity. Adjust as needed.
+        const progress = Math.min((currentTime / 3600) * 100, 100);
+        const job = this.activeHLSJobs.get(jobId);
+        if (job) {
+          job.progress = progress;
+        }
+      }
     });
 
     ffmpegProcess.on('close', (code) => {
-      console.log(`[${jobId}] child process exited with code ${code}`);
-      this.activeJobs.delete(jobId);
+      const job = this.activeHLSJobs.get(jobId);
+      if (job) {
+        job.status = code === 0 ? 'completed' : 'failed';
+        job.progress = 100;
+      }
+      console.log(`Job ${jobId} ${job.status}. Output: ${job.outputPath}`);
+
+      this.ffmpegProcesses.delete(jobId);
     });
-
-    return `Transcoding job started. Job ID: ${jobId}. Output will be: ${outputPath}`;
   }
 
-  cancelTranscodingJob(jobId: string): string {
-    const job = this.activeJobs.get(jobId);
-    if (job) {
-      job.process.kill('SIGTERM');
-      this.activeJobs.delete(jobId);
-      return `Transcoding job ${jobId} has been cancelled.`;
+  getHLSJobStatus(jobId: string): HLSJobStatus | null {
+    return this.activeHLSJobs.get(jobId) || null;
+  }
+
+  cancelHLSJob(jobId: string): boolean {
+    const job = this.activeHLSJobs.get(jobId);
+    const process = this.ffmpegProcesses.get(jobId);
+    if (job && job.status === 'running' && process) {
+      process.kill();
+      job.status = 'cancelled';
+      this.ffmpegProcesses.delete(jobId);
+      return true;
     }
-    return `No active job found with ID ${jobId}.`;
+    return false;
   }
 
-  getActiveJobs(): string[] {
-    return Array.from(this.activeJobs.keys());
+  getTranscodedFilePath(jobId: string): string | null {
+    const job = this.activeHLSJobs.get(jobId);
+    if (job && job.status === 'completed') {
+      return job.outputPath;
+    }
+    return null;
   }
 }
