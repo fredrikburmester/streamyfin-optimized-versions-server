@@ -129,6 +129,10 @@ export class AppService {
     return this.activeHLSJobs.get(jobId) || null;
   }
 
+  getAllHLSJobs(): Map<string, HLSJobStatus> {
+    return this.activeHLSJobs;
+  }
+
   cancelHLSJob(jobId: string): boolean {
     const job = this.activeHLSJobs.get(jobId);
     const process = this.ffmpegProcesses.get(jobId);
