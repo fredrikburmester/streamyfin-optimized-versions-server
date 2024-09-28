@@ -15,7 +15,7 @@ services:
       - USE_QUICK_SYNC=${USE_QUICK_SYNC:-false}
     restart: unless-stopped
     devices:
-      - ${DRI_DEVICE:-/dev/null}:/dev/dri
+      - ${DRI_DEVICE:-/dev/dri}:/dev/dri
 
 volumes:
   node_modules:
