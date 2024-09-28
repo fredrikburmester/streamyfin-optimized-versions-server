@@ -11,6 +11,7 @@ import {
 } from '@nestjs/common';
 import * as fs from 'fs';
 import { Response } from 'express';
+import { unlink } from 'fs/promises';
 
 @Controller()
 export class AppController {
@@ -18,7 +19,7 @@ export class AppController {
 
   @Post('optimize-version')
   async downloadHLS(@Body('url') url: string): Promise<{ id: string }> {
-    const id = await this.appService.downloadAndCombineHLS(url);
+    const id = await this.appService.downloadAndCombine(url);
     return { id };
   }
 
@@ -29,7 +30,7 @@ export class AppController {
 
   @Delete('cancel-job/:id')
   async cancelHLSJob(@Param('id') id: string) {
-    const result = this.appService.cancelHLSJob(id);
+    const result = this.appService.cancelJob(id);
     if (result) {
       return { message: 'Job cancelled successfully' };
     } else {
@@ -61,5 +62,21 @@ export class AppController {
 
     const fileStream = fs.createReadStream(filePath);
     fileStream.pipe(res);
+
+    // Wait for the file to finish sending
+    await new Promise((resolve) => {
+      res.on('finish', resolve);
+    });
+
+    // Delete the file after it has been sent
+    try {
+      await unlink(filePath);
+      console.log(`Successfully deleted ${filePath}`);
+    } catch (error) {
+      console.error(`Error deleting file ${filePath}:`, error);
+    }
+
+    // Update the job status or remove it from the active jobs
+    this.appService.cleanupJob(id);
   }
 }
