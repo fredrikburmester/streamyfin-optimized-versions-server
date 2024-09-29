@@ -10,6 +10,7 @@ export interface HLSJobStatus {
   progress: number;
   outputPath: string;
   inputUrl: string;
+  speed?: number;
 }
 
 @Injectable()
@@ -230,6 +231,8 @@ export class AppService {
     const progressMatch = ffmpegOutput.match(
       /time=(\d{2}):(\d{2}):(\d{2})\.\d{2}/,
     );
+    const speedMatch = ffmpegOutput.match(/speed=(\d+\.?\d*)x/);
+
     if (progressMatch) {
       const [, hours, minutes, seconds] = progressMatch;
       const currentTime =
@@ -240,7 +243,13 @@ export class AppService {
         const progress = Math.min((currentTime / totalDuration) * 100, 99.9);
         const job = this.activeJobs.get(jobId);
         if (job) {
-          job.progress = progress;
+          job.progress = Math.max(progress, 0);
+
+          // Update speed if available
+          if (speedMatch) {
+            const speed = parseFloat(speedMatch[1]);
+            job.speed = Math.max(speed, 0);
+          }
         }
       }
     }
