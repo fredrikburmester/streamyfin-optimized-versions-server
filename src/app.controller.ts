@@ -8,6 +8,7 @@ import {
   Param,
   NotFoundException,
   Res,
+  Logger,
 } from '@nestjs/common';
 import * as fs from 'fs';
 import { Response } from 'express';
@@ -19,10 +20,13 @@ export class AppController {
   constructor(
     private readonly appService: AppService,
     private configService: ConfigService,
+    private logger: Logger, // Inject Logger
   ) {}
 
   @Post('optimize-version')
   async downloadHLS(@Body('url') url: string): Promise<{ id: string }> {
+    this.logger.log(`Optimize request started for URL: ${url}`);
+
     let jellyfinUrl = process.env.JELLYFIN_URL;
 
     let finalUrl: string;
@@ -51,6 +55,8 @@ export class AppController {
 
   @Delete('cancel-job/:id')
   async cancelHLSJob(@Param('id') id: string) {
+    this.logger.log(`Cancellation request for job: ${id}`);
+
     const result = this.appService.cancelJob(id);
     if (result) {
       return { message: 'Job cancelled successfully' };

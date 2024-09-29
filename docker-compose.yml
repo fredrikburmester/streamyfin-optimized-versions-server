@@ -3,17 +3,11 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-      args:
-        - USE_QUICK_SYNC=${USE_QUICK_SYNC:-false}
     ports:
       - '3000:3000'
     environment:
       - NODE_ENV=development
-      - USE_QUICK_SYNC=${USE_QUICK_SYNC:-false}
       - AUTH_TOKEN=${AUTH_TOKEN}
     restart: unless-stopped
-    devices:
-      - ${DRI_DEVICE:-/dev/dri}:/dev/dri
-
 volumes:
   node_modules:

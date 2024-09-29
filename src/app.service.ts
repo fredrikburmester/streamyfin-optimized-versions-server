@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { ChildProcess, spawn } from 'child_process';
 import { v4 as uuidv4 } from 'uuid';
 import * as path from 'path';
@@ -12,6 +12,8 @@ export interface HLSJobStatus {
 
 @Injectable()
 export class AppService {
+  constructor(private logger: Logger) {} // Inject Logger
+
   private activeHLSJobs: Map<string, HLSJobStatus> = new Map();
   private ffmpegProcesses: Map<string, ChildProcess> = new Map();
   private videoDurations: Map<string, number> = new Map();
@@ -25,14 +27,24 @@ export class AppService {
   }
 
   cancelJob(jobId: string): boolean {
+    this.logger.log(`Attempting to cancel job: ${jobId}`);
+
     const job = this.activeHLSJobs.get(jobId);
     const process = this.ffmpegProcesses.get(jobId);
     if (job && job.status === 'running' && process) {
       process.kill();
       job.status = 'cancelled';
       this.ffmpegProcesses.delete(jobId);
+
+      // Clean up the job after cancellation
+      this.cleanupJob(jobId);
+
+      this.logger.log(`Job ${jobId} cancelled successfully`);
+
       return true;
     }
+
+    this.logger.log(`Job ${jobId} not found or not running`);
     return false;
   }
 
@@ -54,50 +66,20 @@ export class AppService {
     const jobId = uuidv4();
     const outputPath = path.join(os.tmpdir(), `combined_${jobId}.mp4`);
 
-    let ffmpegArgs: string[];
+    this.logger.log(`Starting job ${jobId} for URL: ${hlsUrl}`);
 
-    if (this.isAppleSilicon()) {
-      // Apple Silicon (M1/M2) configuration
-      ffmpegArgs = [
-        '-i',
-        hlsUrl,
-        '-c:v',
-        'h264_videotoolbox', // Use VideoToolbox for hardware acceleration
-        '-preset',
-        'fast',
-        '-c:a',
-        'copy',
-        '-bsf:a',
-        'aac_adtstoasc',
-        outputPath,
-      ];
-    } else if (this.isIntelQuickSyncAvailable()) {
-      // Intel QuickSync configuration
-      ffmpegArgs = [
-        '-i',
-        hlsUrl,
-        '-c:v',
-        'h264_qsv', // Use QuickSync for hardware acceleration
-        '-preset',
-        'fast',
-        '-c:a',
-        'copy',
-        '-bsf:a',
-        'aac_adtstoasc',
-        outputPath,
-      ];
-    } else {
-      // Default configuration (software encoding)
-      ffmpegArgs = [
-        '-i',
-        hlsUrl,
-        '-c',
-        'copy',
-        '-bsf:a',
-        'aac_adtstoasc',
-        outputPath,
-      ];
-    }
+    // Simplified FFmpeg command for combining HLS segments
+    const ffmpegArgs = [
+      '-i',
+      hlsUrl,
+      '-c',
+      'copy', // Copy both video and audio without re-encoding
+      '-bsf:a',
+      'aac_adtstoasc', // Fix audio stream for MP4 container if needed
+      '-movflags',
+      'faststart', // Optimize for web playback
+      outputPath,
+    ];
 
     this.activeHLSJobs.set(jobId, {
       status: 'running',
@@ -112,43 +94,42 @@ export class AppService {
     return jobId;
   }
 
-  private isAppleSilicon(): boolean {
-    return os.platform() === 'darwin' && os.arch() === 'arm64';
-  }
-
-  private isIntelQuickSyncAvailable(): boolean {
-    // This is a simplified check. In a real-world scenario, you might want to use
-    // a more robust method to detect QuickSync availability.
-    return os.platform() === 'linux' && process.env.USE_QUICK_SYNC === 'true';
-  }
-
   private startFFmpegProcess(jobId: string, ffmpegArgs: string[]): void {
     // First, get the duration of the input video
-    this.getVideoDuration(ffmpegArgs[1], jobId).then(() => {
-      const ffmpegProcess = spawn('ffmpeg', ffmpegArgs);
-      this.ffmpegProcesses.set(jobId, ffmpegProcess);
+    this.getVideoDuration(ffmpegArgs[1], jobId)
+      .then(() => {
+        const ffmpegProcess = spawn('ffmpeg', ffmpegArgs);
+        this.ffmpegProcesses.set(jobId, ffmpegProcess);
 
-      ffmpegProcess.stdout.on('data', (data) => {
-        console.log(`stdout: ${data}`);
-      });
+        ffmpegProcess.stderr.on('data', (data) => {
+          this.updateProgress(jobId, data.toString());
+        });
 
-      ffmpegProcess.stderr.on('data', (data) => {
-        console.error(`stderr: ${data}`);
-        this.updateProgress(jobId, data.toString());
-      });
+        ffmpegProcess.on('close', (code) => {
+          const job = this.activeHLSJobs.get(jobId);
+          if (job) {
+            job.status = code === 0 ? 'completed' : 'failed';
+            job.progress = 100;
+            this.logger.log(
+              `Job ${jobId} ${job.status}. Output: ${job.outputPath}`,
+            );
+          } else {
+            this.logger.warn(`Job ${jobId} not found on completion`);
+          }
 
-      ffmpegProcess.on('close', (code) => {
+          this.ffmpegProcesses.delete(jobId);
+          this.videoDurations.delete(jobId);
+        });
+      })
+      .catch((error) => {
+        this.logger.error(
+          `Error getting video duration for job ${jobId}: ${error.message}`,
+        );
         const job = this.activeHLSJobs.get(jobId);
         if (job) {
-          job.status = code === 0 ? 'completed' : 'failed';
-          job.progress = 100;
+          job.status = 'failed';
         }
-        console.log(`Job ${jobId} ${job.status}. Output: ${job.outputPath}`);
-
-        this.ffmpegProcesses.delete(jobId);
-        this.videoDurations.delete(jobId);
       });
-    });
   }
 
   private async getVideoDuration(
