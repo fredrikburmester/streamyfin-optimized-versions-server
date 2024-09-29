@@ -98,9 +98,9 @@ export class AppController {
     // Delete the file after it has been sent
     try {
       await unlink(filePath);
-      console.log(`Successfully deleted ${filePath}`);
+      this.logger.log(`Successfully deleted ${filePath}`);
     } catch (error) {
-      console.error(`Error deleting file ${filePath}:`, error);
+      this.logger.error(`Error deleting file ${filePath}:`, error);
     }
 
     // Update the job status or remove it from the active jobs
