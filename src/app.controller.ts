@@ -24,8 +24,8 @@ export class AppController {
   ) {}
 
   @Post('optimize-version')
-  async downloadHLS(@Body('url') url: string): Promise<{ id: string }> {
-    this.logger.log(`Optimize request started for URL: ${url}`);
+  async downloadAndCombine(@Body('url') url: string): Promise<{ id: string }> {
+    this.logger.log(`Optimize request for URL: ${url.slice(0, 50)}...`);
 
     let jellyfinUrl = process.env.JELLYFIN_URL;
 
@@ -50,7 +50,7 @@ export class AppController {
 
   @Get('job-status/:id')
   async getActiveHLSJob(@Param('id') id: string): Promise<HLSJobStatus | null> {
-    return this.appService.getHLSJobStatus(id);
+    return this.appService.getJobStatus(id);
   }
 
   @Delete('cancel-job/:id')
@@ -67,7 +67,7 @@ export class AppController {
 
   @Get('all-jobs')
   async getAllHLSJobs() {
-    return this.appService.getAllHLSJobs();
+    return this.appService.getAllJobs();
   }
 
   @Get('download/:id')

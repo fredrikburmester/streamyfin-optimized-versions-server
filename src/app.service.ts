@@ -3,53 +3,76 @@ import { ChildProcess, spawn } from 'child_process';
 import { v4 as uuidv4 } from 'uuid';
 import * as path from 'path';
 import * as os from 'os';
+import { ConfigService } from '@nestjs/config';
 
 export interface HLSJobStatus {
-  status: 'running' | 'completed' | 'failed' | 'cancelled';
+  status: 'queued' | 'running' | 'completed' | 'failed' | 'cancelled';
   progress: number;
   outputPath: string;
+  inputUrl: string;
 }
 
 @Injectable()
 export class AppService {
-  constructor(private logger: Logger) {} // Inject Logger
-
-  private activeHLSJobs: Map<string, HLSJobStatus> = new Map();
-  private ffmpegProcesses: Map<string, ChildProcess> = new Map();
-  private videoDurations: Map<string, number> = new Map();
-
-  getHLSJobStatus(jobId: string): HLSJobStatus | null {
-    return this.activeHLSJobs.get(jobId) || null;
+  constructor(
+    private logger: Logger,
+    private configService: ConfigService,
+  ) {
+    this.maxConcurrentJobs = this.configService.get<number>(
+      'MAX_CONCURRENT_JOBS',
+      1,
+    );
   }
 
-  getAllHLSJobs(): Map<string, HLSJobStatus> {
-    return this.activeHLSJobs;
+  private activeJobs: Map<string, HLSJobStatus> = new Map();
+  private ffmpegProcesses: Map<string, ChildProcess> = new Map();
+  private videoDurations: Map<string, number> = new Map();
+  private jobQueue: string[] = [];
+  private maxConcurrentJobs: number;
+
+  getJobStatus(jobId: string): HLSJobStatus | null {
+    return this.activeJobs.get(jobId) || null;
+  }
+
+  getAllJobs(): Map<string, HLSJobStatus> {
+    return this.activeJobs;
   }
 
   cancelJob(jobId: string): boolean {
     this.logger.log(`Attempting to cancel job: ${jobId}`);
 
-    const job = this.activeHLSJobs.get(jobId);
+    const job = this.activeJobs.get(jobId);
     const process = this.ffmpegProcesses.get(jobId);
-    if (job && job.status === 'running' && process) {
+    if (
+      job &&
+      (job.status === 'running' || job.status === 'queued') &&
+      process
+    ) {
       process.kill();
-      job.status = 'cancelled';
       this.ffmpegProcesses.delete(jobId);
+
+      job.status = 'cancelled';
+
+      // Remove from queue if it was queued
+      this.jobQueue = this.jobQueue.filter((id) => id !== jobId);
 
       // Clean up the job after cancellation
       this.cleanupJob(jobId);
 
       this.logger.log(`Job ${jobId} cancelled successfully`);
 
+      // Check queue after cancellation
+      this.checkQueue();
+
       return true;
     }
 
-    this.logger.log(`Job ${jobId} not found or not running`);
+    this.logger.log(`Job ${jobId} not found or not running/queued`);
     return false;
   }
 
   getTranscodedFilePath(jobId: string): string | null {
-    const job = this.activeHLSJobs.get(jobId);
+    const job = this.activeJobs.get(jobId);
     if (job && job.status === 'completed') {
       return job.outputPath;
     }
@@ -57,47 +80,74 @@ export class AppService {
   }
 
   cleanupJob(jobId: string): void {
-    this.activeHLSJobs.delete(jobId);
+    this.activeJobs.delete(jobId);
     this.ffmpegProcesses.delete(jobId);
     this.videoDurations.delete(jobId);
   }
 
-  async downloadAndCombine(hlsUrl: string): Promise<string> {
+  async downloadAndCombine(url: string): Promise<string> {
     const jobId = uuidv4();
     const outputPath = path.join(os.tmpdir(), `combined_${jobId}.mp4`);
 
-    this.logger.log(`Starting job ${jobId} for URL: ${hlsUrl}`);
+    this.logger.log(`Queueing job ${jobId} for URL: ${url.slice(0, 50)}...`);
 
-    // Simplified FFmpeg command for combining HLS segments
-    const ffmpegArgs = [
-      '-i',
-      hlsUrl,
-      '-c',
-      'copy', // Copy both video and audio without re-encoding
-      '-bsf:a',
-      'aac_adtstoasc', // Fix audio stream for MP4 container if needed
-      '-movflags',
-      'faststart', // Optimize for web playback
-      outputPath,
-    ];
-
-    this.activeHLSJobs.set(jobId, {
-      status: 'running',
+    this.activeJobs.set(jobId, {
+      status: 'queued',
       progress: 0,
       outputPath,
+      inputUrl: url,
     });
 
-    // Start the FFmpeg process in the background
-    this.startFFmpegProcess(jobId, ffmpegArgs);
+    this.jobQueue.push(jobId);
+    this.checkQueue(); // Check if we can start the job immediately
 
-    // Immediately return the job ID
     return jobId;
   }
 
-  private startFFmpegProcess(jobId: string, ffmpegArgs: string[]): void {
-    // First, get the duration of the input video
-    this.getVideoDuration(ffmpegArgs[1], jobId)
-      .then(() => {
+  private checkQueue() {
+    const runningJobs = Array.from(this.activeJobs.values()).filter(
+      (job) => job.status === 'running',
+    ).length;
+
+    while (runningJobs < this.maxConcurrentJobs && this.jobQueue.length > 0) {
+      const nextJobId = this.jobQueue.shift();
+      if (nextJobId) {
+        this.startJob(nextJobId);
+      }
+    }
+  }
+
+  private startJob(jobId: string) {
+    const job = this.activeJobs.get(jobId);
+    if (job) {
+      job.status = 'running';
+      const ffmpegArgs = this.getFfmpegArgs(job.inputUrl, job.outputPath);
+      this.startFFmpegProcess(jobId, ffmpegArgs);
+    }
+  }
+
+  private getFfmpegArgs(inputUrl: string, outputPath: string): string[] {
+    return [
+      '-i',
+      inputUrl,
+      '-c',
+      'copy',
+      '-bsf:a',
+      'aac_adtstoasc',
+      '-movflags',
+      'faststart',
+      outputPath,
+    ];
+  }
+
+  private async startFFmpegProcess(
+    jobId: string,
+    ffmpegArgs: string[],
+  ): Promise<void> {
+    try {
+      await this.getVideoDuration(ffmpegArgs[1], jobId);
+
+      return new Promise((resolve, reject) => {
         const ffmpegProcess = spawn('ffmpeg', ffmpegArgs);
         this.ffmpegProcesses.set(jobId, ffmpegProcess);
 
@@ -106,30 +156,41 @@ export class AppService {
         });
 
         ffmpegProcess.on('close', (code) => {
-          const job = this.activeHLSJobs.get(jobId);
+          const job = this.activeJobs.get(jobId);
           if (job) {
             job.status = code === 0 ? 'completed' : 'failed';
             job.progress = 100;
             this.logger.log(
               `Job ${jobId} ${job.status}. Output: ${job.outputPath}`,
             );
-          } else {
-            this.logger.warn(`Job ${jobId} not found on completion`);
           }
 
           this.ffmpegProcesses.delete(jobId);
           this.videoDurations.delete(jobId);
+
+          // Check queue after job completion
+          this.checkQueue();
+
+          resolve();
         });
-      })
-      .catch((error) => {
-        this.logger.error(
-          `Error getting video duration for job ${jobId}: ${error.message}`,
-        );
-        const job = this.activeHLSJobs.get(jobId);
-        if (job) {
-          job.status = 'failed';
-        }
+
+        ffmpegProcess.on('error', (error) => {
+          this.logger.error(
+            `FFmpeg process error for job ${jobId}: ${error.message}`,
+          );
+          reject(error);
+        });
       });
+    } catch (error) {
+      this.logger.error(`Error processing job ${jobId}: ${error.message}`);
+      const job = this.activeJobs.get(jobId);
+      if (job) {
+        job.status = 'failed';
+      }
+
+      // Check queue after job failure
+      this.checkQueue();
+    }
   }
 
   private async getVideoDuration(
@@ -177,7 +238,7 @@ export class AppService {
       const totalDuration = this.videoDurations.get(jobId);
       if (totalDuration) {
         const progress = Math.min((currentTime / totalDuration) * 100, 99.9);
-        const job = this.activeHLSJobs.get(jobId);
+        const job = this.activeJobs.get(jobId);
         if (job) {
           job.progress = progress;
         }
