@@ -7,9 +7,6 @@ services:
         - USE_QUICK_SYNC=${USE_QUICK_SYNC:-false}
     ports:
       - '3000:3000'
-    volumes:
-      - ./src:/usr/src/app/src
-      - ./media:/media
     environment:
       - NODE_ENV=development
       - USE_QUICK_SYNC=${USE_QUICK_SYNC:-false}

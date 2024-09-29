@@ -12,14 +12,35 @@ import {
 import * as fs from 'fs';
 import { Response } from 'express';
 import { unlink } from 'fs/promises';
+import { ConfigService } from '@nestjs/config';
 
 @Controller()
 export class AppController {
-  constructor(private readonly appService: AppService) {}
+  constructor(
+    private readonly appService: AppService,
+    private configService: ConfigService,
+  ) {}
 
   @Post('optimize-version')
   async downloadHLS(@Body('url') url: string): Promise<{ id: string }> {
-    const id = await this.appService.downloadAndCombine(url);
+    let jellyfinUrl = process.env.JELLYFIN_URL;
+
+    let finalUrl: string;
+
+    if (jellyfinUrl) {
+      jellyfinUrl = jellyfinUrl.replace(/\/$/, '');
+      // If JELLYFIN_URL is set, use it to replace the base of the incoming URL
+      const parsedUrl = new URL(url);
+      finalUrl = new URL(
+        parsedUrl.pathname + parsedUrl.search,
+        jellyfinUrl,
+      ).toString();
+    } else {
+      // If JELLYFIN_URL is not set, use the incoming URL as is
+      finalUrl = url;
+    }
+
+    const id = await this.appService.downloadAndCombine(finalUrl);
     return { id };
   }
 
