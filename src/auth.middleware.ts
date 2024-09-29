@@ -4,19 +4,27 @@ import {
   UnauthorizedException,
 } from '@nestjs/common';
 import { Request, Response, NextFunction } from 'express';
+import { JellyfinAuthService } from './jellyfin-auth.service'; // You'll need to create this service
 
 @Injectable()
 export class AuthMiddleware implements NestMiddleware {
-  use(req: Request, res: Response, next: NextFunction) {
+  constructor(private jellyfinAuthService: JellyfinAuthService) {}
+
+  async use(req: Request, res: Response, next: NextFunction) {
     const authHeader = req.headers['authorization'];
-    const token = authHeader && authHeader.split(' ')[1];
 
-    if (token == null) return res.sendStatus(401);
+    if (!authHeader) return res.sendStatus(401);
 
-    if (token !== process.env.AUTH_TOKEN) {
-      throw new UnauthorizedException('Invalid token');
+    try {
+      const isValid =
+        await this.jellyfinAuthService.validateCredentials(authHeader);
+      if (!isValid) {
+        throw new UnauthorizedException('Invalid credentials');
+      }
+      next();
+    } catch (error) {
+      console.log(error);
+      throw new UnauthorizedException('Authentication failed');
     }
-
-    next();
   }
 }

@@ -7,7 +7,6 @@ services:
       - '3000:3000'
     environment:
       - NODE_ENV=development
-      - AUTH_TOKEN=${AUTH_TOKEN}
     restart: unless-stopped
 volumes:
   node_modules:

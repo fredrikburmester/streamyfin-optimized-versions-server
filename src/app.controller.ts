@@ -13,13 +13,11 @@ import {
 import * as fs from 'fs';
 import { Response } from 'express';
 import { unlink } from 'fs/promises';
-import { ConfigService } from '@nestjs/config';
 
 @Controller()
 export class AppController {
   constructor(
     private readonly appService: AppService,
-    private configService: ConfigService,
     private logger: Logger, // Inject Logger
   ) {}
 
