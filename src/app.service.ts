@@ -131,10 +131,10 @@ export class AppService {
     return [
       '-i',
       inputUrl,
-      '-c',
+      '-c:v',
       'copy',
-      '-bsf:a',
-      'aac_adtstoasc',
+      '-c:a',
+      'copy',
       '-movflags',
       'faststart',
       outputPath,
@@ -210,14 +210,9 @@ export class AppService {
       ]);
 
       let output = '';
-      let errorOutput = '';
 
       ffprobe.stdout.on('data', (data) => {
         output += data.toString();
-      });
-
-      ffprobe.stderr.on('data', (data) => {
-        errorOutput += data.toString();
       });
 
       ffprobe.on('close', (code) => {
@@ -226,25 +221,8 @@ export class AppService {
           this.videoDurations.set(jobId, duration);
           resolve();
         } else {
-          this.logger.error(`ffprobe error for job ${jobId}:`);
-          this.logger.error(`Input URL: ${inputUrl}`);
-          this.logger.error(`Error output: ${errorOutput}`);
-          this.logger.error(`Standard output: ${output}`);
-          reject(
-            new Error(
-              `ffprobe process exited with code ${code}. Error: ${errorOutput}`,
-            ),
-          );
+          reject(new Error(`ffprobe process exited with code ${code}`));
         }
-      });
-
-      ffprobe.on('error', (error) => {
-        this.logger.error(`ffprobe spawn error for job ${jobId}:`);
-        this.logger.error(`Input URL: ${inputUrl}`);
-        this.logger.error(`Spawn error: ${error.message}`);
-        reject(
-          new Error(`Failed to spawn ffprobe process. Error: ${error.message}`),
-        );
       });
     });
   }
