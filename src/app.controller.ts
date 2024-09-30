@@ -9,9 +9,12 @@ import {
   NotFoundException,
   Res,
   Logger,
+  StreamableFile,
 } from '@nestjs/common';
-import * as fs from 'fs';
 import { Response } from 'express';
+import { basename } from 'path';
+import * as fs from 'fs';
+import * as mime from 'mime-types';
 
 @Controller()
 export class AppController {
@@ -74,29 +77,26 @@ export class AppController {
   }
 
   @Get('download/:id')
-  async downloadTranscodedFile(@Param('id') id: string, @Res() res: Response) {
+  async downloadTranscodedFile(
+    @Param('id') id: string,
+    @Res({ passthrough: true }) res: Response,
+  ) {
     const filePath = this.appService.getTranscodedFilePath(id);
 
     if (!filePath) {
       throw new NotFoundException('File not found or job not completed');
     }
 
-    const fileName = filePath.split('/').pop();
-
+    const fileName = basename(filePath);
     this.logger.log(`Download request for file: ${fileName}`);
 
-    const stat = fs.statSync(filePath);
+    const mimeType = mime.lookup(filePath) || 'application/octet-stream';
 
-    res.setHeader('Content-Length', stat.size);
-    res.setHeader('Content-Type', 'video/mp4');
-    res.setHeader('Content-Disposition', `attachment; filename=${fileName}`);
-
-    const fileStream = fs.createReadStream(filePath);
-    fileStream.pipe(res);
-
-    // Wait for the file to finish sending
-    await new Promise((resolve) => {
-      res.on('finish', resolve);
+    res.set({
+      'Content-Type': mimeType,
+      'Content-Disposition': `attachment; filename="${fileName}"`,
     });
+
+    return new StreamableFile(fs.createReadStream(filePath));
   }
 }

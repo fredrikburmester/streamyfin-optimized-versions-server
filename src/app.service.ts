@@ -47,10 +47,11 @@ export class AppService {
     fileExtension: string,
   ): Promise<string> {
     const jobId = uuidv4();
-    const outputPath = path.join(
-      this.cacheDir,
-      `combined_${jobId}.${fileExtension}`,
-    );
+    // const outputPath = path.join(
+    //   this.cacheDir,
+    //   `combined_${jobId}.${fileExtension}`,
+    // );
+    const outputPath = path.join(this.cacheDir, `combined_${jobId}.mp4`);
 
     this.logger.log(
       `Queueing job ${jobId.padEnd(36)} | URL: ${(url.slice(0, 50) + '...').padEnd(53)} | Path: ${outputPath}`,
@@ -147,12 +148,12 @@ export class AppService {
     return [
       '-i',
       inputUrl,
-      '-c:v',
-      'copy',
-      '-c:a',
-      'copy',
+      '-c',
+      'copy', // Copy both video and audio without re-encoding
       '-movflags',
-      'faststart',
+      '+faststart', // Optimize for web streaming
+      '-f',
+      'mp4', // Force MP4 container
       outputPath,
     ];
   }
