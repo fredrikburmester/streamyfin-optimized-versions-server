@@ -1,9 +1,14 @@
-import { Injectable, Logger } from '@nestjs/common';
+import {
+  Injectable,
+  InternalServerErrorException,
+  Logger,
+} from '@nestjs/common';
 import { ChildProcess, spawn } from 'child_process';
 import { v4 as uuidv4 } from 'uuid';
 import * as path from 'path';
 import { ConfigService } from '@nestjs/config';
 import * as fs from 'fs';
+import { promises as fsPromises } from 'fs';
 
 export interface JobStatus {
   status: 'queued' | 'running' | 'completed' | 'failed' | 'cancelled';
@@ -27,13 +32,10 @@ export class AppService {
     private logger: Logger,
     private configService: ConfigService,
   ) {
+    this.cacheDir = path.join(process.cwd(), 'cache');
     this.maxConcurrentJobs = this.configService.get<number>(
       'MAX_CONCURRENT_JOBS',
       1,
-    );
-    this.cacheDir = this.configService.get<string>(
-      'CACHE_DIR',
-      path.join(process.cwd(), 'cache'),
     );
 
     // Ensure the cache directory exists
@@ -44,6 +46,7 @@ export class AppService {
 
   async downloadAndCombine(
     url: string,
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
     fileExtension: string,
   ): Promise<string> {
     const jobId = uuidv4();
@@ -71,25 +74,27 @@ export class AppService {
     return jobId;
   }
 
-  private checkQueue() {
-    const runningJobs = Array.from(this.activeJobs.values()).filter(
-      (job) => job.status === 'running',
-    ).length;
-
-    while (runningJobs < this.maxConcurrentJobs && this.jobQueue.length > 0) {
-      const nextJobId = this.jobQueue.shift();
-      if (nextJobId) {
-        this.startJob(nextJobId);
-      }
-    }
-  }
-
   getJobStatus(jobId: string): JobStatus | null {
     return this.activeJobs.get(jobId) || null;
   }
 
   getAllJobs(): Map<string, JobStatus> {
     return this.activeJobs;
+  }
+
+  async deleteCache(): Promise<{ message: string }> {
+    try {
+      const files = await fsPromises.readdir(this.cacheDir);
+      await Promise.all(
+        files.map((file) => fsPromises.unlink(path.join(this.cacheDir, file))),
+      );
+      return {
+        message: 'Cache deleted successfully',
+      };
+    } catch (error) {
+      this.logger.error('Error deleting cache:', error);
+      throw new InternalServerErrorException('Failed to delete cache');
+    }
   }
 
   cancelJob(jobId: string): boolean {
@@ -132,6 +137,19 @@ export class AppService {
     this.activeJobs.delete(jobId);
     this.ffmpegProcesses.delete(jobId);
     this.videoDurations.delete(jobId);
+  }
+
+  private checkQueue() {
+    const runningJobs = Array.from(this.activeJobs.values()).filter(
+      (job) => job.status === 'running',
+    ).length;
+
+    while (runningJobs < this.maxConcurrentJobs && this.jobQueue.length > 0) {
+      const nextJobId = this.jobQueue.shift();
+      if (nextJobId) {
+        this.startJob(nextJobId);
+      }
+    }
   }
 
   private startJob(jobId: string) {

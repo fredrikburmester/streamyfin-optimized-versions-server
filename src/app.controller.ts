@@ -99,4 +99,10 @@ export class AppController {
 
     return new StreamableFile(fs.createReadStream(filePath));
   }
+
+  @Delete('delete-cache')
+  async deleteCache() {
+    this.logger.log('Cache deletion request');
+    return this.appService.deleteCache();
+  }
 }
