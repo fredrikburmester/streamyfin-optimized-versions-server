@@ -4,14 +4,17 @@ import { AppService } from './app.service';
 import { AuthMiddleware } from './auth.middleware';
 import { ConfigModule } from '@nestjs/config';
 import { JellyfinAuthService } from './jellyfin-auth.service';
+import { ScheduleModule } from '@nestjs/schedule';
 
 @Module({
-  imports: [ConfigModule.forRoot({ isGlobal: true })],
+  imports: [ScheduleModule.forRoot(), ConfigModule.forRoot({ isGlobal: true })],
   controllers: [AppController],
   providers: [AppService, Logger, JellyfinAuthService],
 })
 export class AppModule implements NestModule {
   configure(consumer: MiddlewareConsumer) {
-    consumer.apply(AuthMiddleware).forRoutes('*');
+    consumer
+      .apply(AuthMiddleware)
+      .forRoutes('optimize-version', 'download/:id', 'cancel-job/:id');
   }
 }

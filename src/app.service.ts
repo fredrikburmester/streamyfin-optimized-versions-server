@@ -2,19 +2,27 @@ import { Injectable, Logger } from '@nestjs/common';
 import { ChildProcess, spawn } from 'child_process';
 import { v4 as uuidv4 } from 'uuid';
 import * as path from 'path';
-import * as os from 'os';
 import { ConfigService } from '@nestjs/config';
+import * as fs from 'fs';
 
-export interface HLSJobStatus {
+export interface JobStatus {
   status: 'queued' | 'running' | 'completed' | 'failed' | 'cancelled';
   progress: number;
   outputPath: string;
   inputUrl: string;
   speed?: number;
+  timestamp: Date;
 }
 
 @Injectable()
 export class AppService {
+  private activeJobs: Map<string, JobStatus> = new Map();
+  private ffmpegProcesses: Map<string, ChildProcess> = new Map();
+  private videoDurations: Map<string, number> = new Map();
+  private jobQueue: string[] = [];
+  private maxConcurrentJobs: number;
+  private cacheDir: string;
+
   constructor(
     private logger: Logger,
     private configService: ConfigService,
@@ -23,25 +31,67 @@ export class AppService {
       'MAX_CONCURRENT_JOBS',
       1,
     );
+    this.cacheDir = this.configService.get<string>(
+      'CACHE_DIR',
+      path.join(process.cwd(), 'cache'),
+    );
+
+    // Ensure the cache directory exists
+    if (!fs.existsSync(this.cacheDir)) {
+      fs.mkdirSync(this.cacheDir, { recursive: true });
+    }
   }
 
-  private activeJobs: Map<string, HLSJobStatus> = new Map();
-  private ffmpegProcesses: Map<string, ChildProcess> = new Map();
-  private videoDurations: Map<string, number> = new Map();
-  private jobQueue: string[] = [];
-  private maxConcurrentJobs: number;
+  async downloadAndCombine(
+    url: string,
+    fileExtension: string,
+  ): Promise<string> {
+    const jobId = uuidv4();
+    const outputPath = path.join(
+      this.cacheDir,
+      `combined_${jobId}.${fileExtension}`,
+    );
 
-  getJobStatus(jobId: string): HLSJobStatus | null {
+    this.logger.log(
+      `Queueing job ${jobId.padEnd(36)} | URL: ${(url.slice(0, 50) + '...').padEnd(53)} | Path: ${outputPath}`,
+    );
+
+    this.activeJobs.set(jobId, {
+      status: 'queued',
+      progress: 0,
+      outputPath,
+      inputUrl: url,
+      timestamp: new Date(),
+    });
+
+    this.jobQueue.push(jobId);
+    this.checkQueue(); // Check if we can start the job immediately
+
+    return jobId;
+  }
+
+  private checkQueue() {
+    const runningJobs = Array.from(this.activeJobs.values()).filter(
+      (job) => job.status === 'running',
+    ).length;
+
+    while (runningJobs < this.maxConcurrentJobs && this.jobQueue.length > 0) {
+      const nextJobId = this.jobQueue.shift();
+      if (nextJobId) {
+        this.startJob(nextJobId);
+      }
+    }
+  }
+
+  getJobStatus(jobId: string): JobStatus | null {
     return this.activeJobs.get(jobId) || null;
   }
 
-  getAllJobs(): Map<string, HLSJobStatus> {
+  getAllJobs(): Map<string, JobStatus> {
     return this.activeJobs;
   }
 
   cancelJob(jobId: string): boolean {
-    this.logger.log(`Attempting to cancel job: ${jobId}`);
-
     const job = this.activeJobs.get(jobId);
     const process = this.ffmpegProcesses.get(jobId);
     if (
@@ -56,9 +106,6 @@ export class AppService {
 
       // Remove from queue if it was queued
       this.jobQueue = this.jobQueue.filter((id) => id !== jobId);
-
-      // Clean up the job after cancellation
-      this.cleanupJob(jobId);
 
       this.logger.log(`Job ${jobId} cancelled successfully`);
 
@@ -86,44 +133,13 @@ export class AppService {
     this.videoDurations.delete(jobId);
   }
 
-  async downloadAndCombine(url: string): Promise<string> {
-    const jobId = uuidv4();
-    const outputPath = path.join(os.tmpdir(), `combined_${jobId}.mp4`);
-
-    this.logger.log(`Queueing job ${jobId} for URL: ${url.slice(0, 50)}...`);
-
-    this.activeJobs.set(jobId, {
-      status: 'queued',
-      progress: 0,
-      outputPath,
-      inputUrl: url,
-    });
-
-    this.jobQueue.push(jobId);
-    this.checkQueue(); // Check if we can start the job immediately
-
-    return jobId;
-  }
-
-  private checkQueue() {
-    const runningJobs = Array.from(this.activeJobs.values()).filter(
-      (job) => job.status === 'running',
-    ).length;
-
-    while (runningJobs < this.maxConcurrentJobs && this.jobQueue.length > 0) {
-      const nextJobId = this.jobQueue.shift();
-      if (nextJobId) {
-        this.startJob(nextJobId);
-      }
-    }
-  }
-
   private startJob(jobId: string) {
     const job = this.activeJobs.get(jobId);
     if (job) {
       job.status = 'running';
       const ffmpegArgs = this.getFfmpegArgs(job.inputUrl, job.outputPath);
       this.startFFmpegProcess(jobId, ffmpegArgs);
+      this.logger.log(`Started job ${jobId}`);
     }
   }
 
@@ -159,20 +175,29 @@ export class AppService {
         ffmpegProcess.on('close', (code) => {
           const job = this.activeJobs.get(jobId);
           if (job) {
-            job.status = code === 0 ? 'completed' : 'failed';
-            job.progress = 100;
-            this.logger.log(
-              `Job ${jobId} ${job.status}. Output: ${job.outputPath}`,
-            );
+            if (code === 0) {
+              job.status = 'completed';
+              job.progress = 100;
+              this.logger.log(
+                `Job ${jobId} completed successfully. Output: ${job.outputPath}`,
+              );
+            } else {
+              job.status = 'failed';
+              job.progress = 0;
+              this.logger.error(
+                `Job ${jobId} failed with exit code ${code}. Input URL: ${job.inputUrl}`,
+              );
+            }
           }
 
           this.ffmpegProcesses.delete(jobId);
           this.videoDurations.delete(jobId);
 
-          // Check queue after job completion
-          this.checkQueue();
-
-          resolve();
+          if (code === 0) {
+            resolve();
+          } else {
+            reject(new Error(`FFmpeg process failed with exit code ${code}`));
+          }
         });
 
         ffmpegProcess.on('error', (error) => {
@@ -188,8 +213,8 @@ export class AppService {
       if (job) {
         job.status = 'failed';
       }
-
-      // Check queue after job failure
+    } finally {
+      // Check queue after job completion or failure
       this.checkQueue();
     }
   }

@@ -1,6 +1,7 @@
 *.mkv
 *.mp4
 /media
+/cache
 
 # compiled output
 /dist

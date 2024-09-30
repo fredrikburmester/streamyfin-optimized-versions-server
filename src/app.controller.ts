@@ -1,4 +1,4 @@
-import { AppService, HLSJobStatus } from './app.service';
+import { AppService, JobStatus } from './app.service';
 import {
   Controller,
   Get,
@@ -12,7 +12,6 @@ import {
 } from '@nestjs/common';
 import * as fs from 'fs';
 import { Response } from 'express';
-import { unlink } from 'fs/promises';
 
 @Controller()
 export class AppController {
@@ -22,7 +21,10 @@ export class AppController {
   ) {}
 
   @Post('optimize-version')
-  async downloadAndCombine(@Body('url') url: string): Promise<{ id: string }> {
+  async downloadAndCombine(
+    @Body('url') url: string,
+    @Body('fileExtension') fileExtension: string,
+  ): Promise<{ id: string }> {
     this.logger.log(`Optimize request for URL: ${url.slice(0, 50)}...`);
 
     let jellyfinUrl = process.env.JELLYFIN_URL;
@@ -42,17 +44,20 @@ export class AppController {
       finalUrl = url;
     }
 
-    const id = await this.appService.downloadAndCombine(finalUrl);
+    const id = await this.appService.downloadAndCombine(
+      finalUrl,
+      fileExtension,
+    );
     return { id };
   }
 
   @Get('job-status/:id')
-  async getActiveHLSJob(@Param('id') id: string): Promise<HLSJobStatus | null> {
+  async getActiveJob(@Param('id') id: string): Promise<JobStatus | null> {
     return this.appService.getJobStatus(id);
   }
 
   @Delete('cancel-job/:id')
-  async cancelHLSJob(@Param('id') id: string) {
+  async cancelJob(@Param('id') id: string) {
     this.logger.log(`Cancellation request for job: ${id}`);
 
     const result = this.appService.cancelJob(id);
@@ -64,7 +69,7 @@ export class AppController {
   }
 
   @Get('all-jobs')
-  async getAllHLSJobs() {
+  async getAllJobs() {
     return this.appService.getAllJobs();
   }
 
@@ -76,14 +81,15 @@ export class AppController {
       throw new NotFoundException('File not found or job not completed');
     }
 
+    const fileName = filePath.split('/').pop();
+
+    this.logger.log(`Download request for file: ${fileName}`);
+
     const stat = fs.statSync(filePath);
 
     res.setHeader('Content-Length', stat.size);
     res.setHeader('Content-Type', 'video/mp4');
-    res.setHeader(
-      'Content-Disposition',
-      `attachment; filename=transcoded_${id}.mp4`,
-    );
+    res.setHeader('Content-Disposition', `attachment; filename=${fileName}`);
 
     const fileStream = fs.createReadStream(filePath);
     fileStream.pipe(res);
@@ -92,16 +98,5 @@ export class AppController {
     await new Promise((resolve) => {
       res.on('finish', resolve);
     });
-
-    // Delete the file after it has been sent
-    try {
-      await unlink(filePath);
-      this.logger.log(`Successfully deleted ${filePath}`);
-    } catch (error) {
-      this.logger.error(`Error deleting file ${filePath}:`, error);
-    }
-
-    // Update the job status or remove it from the active jobs
-    this.appService.cleanupJob(id);
   }
 }
