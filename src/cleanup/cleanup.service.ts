@@ -15,13 +15,13 @@ export class CleanupService {
     const jobs = this.appService.getAllJobs();
     const now = new Date();
 
-    for (const [jobId, job] of jobs.entries()) {
+    for (const job of jobs) {
       if (
         job.status === 'completed' &&
         this.isOlderThanOneHour(job.timestamp, now)
       ) {
         this.removeTranscodedFile(job.outputPath);
-        this.appService.cleanupJob(jobId);
+        this.appService.cleanupJob(job.id);
       }
     }
   }

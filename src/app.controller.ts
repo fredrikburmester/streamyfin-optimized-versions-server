@@ -1,4 +1,4 @@
-import { AppService, JobStatus } from './app.service';
+import { AppService, Job } from './app.service';
 import {
   Controller,
   Get,
@@ -10,6 +10,7 @@ import {
   Res,
   Logger,
   StreamableFile,
+  Query,
 } from '@nestjs/common';
 import { Response } from 'express';
 import { basename } from 'path';
@@ -27,6 +28,9 @@ export class AppController {
   async downloadAndCombine(
     @Body('url') url: string,
     @Body('fileExtension') fileExtension: string,
+    @Body('deviceId') deviceId: string,
+    @Body('itemId') itemId: string,
+    @Body('item') item: any,
   ): Promise<{ id: string }> {
     this.logger.log(`Optimize request for URL: ${url.slice(0, 50)}...`);
 
@@ -50,12 +54,15 @@ export class AppController {
     const id = await this.appService.downloadAndCombine(
       finalUrl,
       fileExtension,
+      deviceId,
+      itemId,
+      item,
     );
     return { id };
   }
 
   @Get('job-status/:id')
-  async getActiveJob(@Param('id') id: string): Promise<JobStatus | null> {
+  async getActiveJob(@Param('id') id: string): Promise<Job | null> {
     return this.appService.getJobStatus(id);
   }
 
@@ -72,8 +79,8 @@ export class AppController {
   }
 
   @Get('all-jobs')
-  async getAllJobs() {
-    return this.appService.getAllJobs();
+  async getAllJobs(@Query('deviceId') deviceId?: string) {
+    return this.appService.getAllJobs(deviceId);
   }
 
   @Get('download/:id')

@@ -10,18 +10,22 @@ import { ConfigService } from '@nestjs/config';
 import * as fs from 'fs';
 import { promises as fsPromises } from 'fs';
 
-export interface JobStatus {
+export interface Job {
+  id: string;
   status: 'queued' | 'running' | 'completed' | 'failed' | 'cancelled';
   progress: number;
   outputPath: string;
   inputUrl: string;
+  deviceId: string;
+  itemId: string;
   speed?: number;
   timestamp: Date;
+  item?: any;
 }
 
 @Injectable()
 export class AppService {
-  private activeJobs: Map<string, JobStatus> = new Map();
+  private activeJobs: Job[] = [];
   private ffmpegProcesses: Map<string, ChildProcess> = new Map();
   private videoDurations: Map<string, number> = new Map();
   private jobQueue: string[] = [];
@@ -48,23 +52,26 @@ export class AppService {
     url: string,
     // eslint-disable-next-line @typescript-eslint/no-unused-vars
     fileExtension: string,
+    deviceId: string,
+    itemId: string,
+    item: any,
   ): Promise<string> {
     const jobId = uuidv4();
-    // const outputPath = path.join(
-    //   this.cacheDir,
-    //   `combined_${jobId}.${fileExtension}`,
-    // );
     const outputPath = path.join(this.cacheDir, `combined_${jobId}.mp4`);
 
     this.logger.log(
       `Queueing job ${jobId.padEnd(36)} | URL: ${(url.slice(0, 50) + '...').padEnd(53)} | Path: ${outputPath}`,
     );
 
-    this.activeJobs.set(jobId, {
+    this.activeJobs.push({
+      id: jobId,
       status: 'queued',
       progress: 0,
       outputPath,
       inputUrl: url,
+      itemId,
+      item,
+      deviceId,
       timestamp: new Date(),
     });
 
@@ -74,12 +81,16 @@ export class AppService {
     return jobId;
   }
 
-  getJobStatus(jobId: string): JobStatus | null {
-    return this.activeJobs.get(jobId) || null;
+  getJobStatus(jobId: string): Job | null {
+    const job = this.activeJobs.find((job) => job.id === jobId);
+    return job || null;
   }
 
-  getAllJobs(): Map<string, JobStatus> {
-    return this.activeJobs;
+  getAllJobs(deviceId?: string | null): Job[] {
+    if (!deviceId) {
+      return this.activeJobs;
+    }
+    return this.activeJobs.filter((job) => job.deviceId === deviceId);
   }
 
   async deleteCache(): Promise<{ message: string }> {
@@ -98,35 +109,26 @@ export class AppService {
   }
 
   cancelJob(jobId: string): boolean {
-    const job = this.activeJobs.get(jobId);
+    const job = this.activeJobs.find((job) => job.id === jobId);
     const process = this.ffmpegProcesses.get(jobId);
-    if (
-      job &&
-      (job.status === 'running' || job.status === 'queued') &&
-      process
-    ) {
-      process.kill();
+    if (process) {
+      process.kill('SIGKILL');
       this.ffmpegProcesses.delete(jobId);
-
-      job.status = 'cancelled';
-
-      // Remove from queue if it was queued
-      this.jobQueue = this.jobQueue.filter((id) => id !== jobId);
-
-      this.logger.log(`Job ${jobId} cancelled successfully`);
-
-      // Check queue after cancellation
-      this.checkQueue();
-
-      return true;
     }
 
-    this.logger.log(`Job ${jobId} not found or not running/queued`);
-    return false;
+    if (job) {
+      this.jobQueue = this.jobQueue.filter((id) => id !== jobId);
+      this.activeJobs = this.activeJobs.filter((job) => job.id !== jobId);
+    }
+
+    this.checkQueue();
+
+    this.logger.log(`Job ${jobId} canceled`);
+    return true;
   }
 
   getTranscodedFilePath(jobId: string): string | null {
-    const job = this.activeJobs.get(jobId);
+    const job = this.activeJobs.find((job) => job.id === jobId);
     if (job && job.status === 'completed') {
       return job.outputPath;
     }
@@ -134,7 +136,7 @@ export class AppService {
   }
 
   cleanupJob(jobId: string): void {
-    this.activeJobs.delete(jobId);
+    this.activeJobs = this.activeJobs.filter((job) => job.id !== jobId);
     this.ffmpegProcesses.delete(jobId);
     this.videoDurations.delete(jobId);
   }
@@ -153,7 +155,7 @@ export class AppService {
   }
 
   private startJob(jobId: string) {
-    const job = this.activeJobs.get(jobId);
+    const job = this.activeJobs.find((job) => job.id === jobId);
     if (job) {
       job.status = 'running';
       const ffmpegArgs = this.getFfmpegArgs(job.inputUrl, job.outputPath);
@@ -192,29 +194,29 @@ export class AppService {
         });
 
         ffmpegProcess.on('close', (code) => {
-          const job = this.activeJobs.get(jobId);
-          if (job) {
-            if (code === 0) {
-              job.status = 'completed';
-              job.progress = 100;
-              this.logger.log(
-                `Job ${jobId} completed successfully. Output: ${job.outputPath}`,
-              );
-            } else {
-              job.status = 'failed';
-              job.progress = 0;
-              this.logger.error(
-                `Job ${jobId} failed with exit code ${code}. Input URL: ${job.inputUrl}`,
-              );
-            }
-          }
-
           this.ffmpegProcesses.delete(jobId);
           this.videoDurations.delete(jobId);
 
+          const job = this.activeJobs.find((job) => job.id === jobId);
+          if (!job) {
+            // Job was cancelled and removed, just resolve
+            resolve();
+            return;
+          }
+
           if (code === 0) {
+            job.status = 'completed';
+            job.progress = 100;
+            this.logger.log(
+              `Job ${jobId} completed successfully. Output: ${job.outputPath}`,
+            );
             resolve();
           } else {
+            job.status = 'failed';
+            job.progress = 0;
+            this.logger.error(
+              `Job ${jobId} failed with exit code ${code}. Input URL: ${job.inputUrl}`,
+            );
             reject(new Error(`FFmpeg process failed with exit code ${code}`));
           }
         });
@@ -228,7 +230,7 @@ export class AppService {
       });
     } catch (error) {
       this.logger.error(`Error processing job ${jobId}: ${error.message}`);
-      const job = this.activeJobs.get(jobId);
+      const job = this.activeJobs.find((job) => job.id === jobId);
       if (job) {
         job.status = 'failed';
       }
@@ -237,7 +239,6 @@ export class AppService {
       this.checkQueue();
     }
   }
-
   private async getVideoDuration(
     inputUrl: string,
     jobId: string,
@@ -285,7 +286,7 @@ export class AppService {
       const totalDuration = this.videoDurations.get(jobId);
       if (totalDuration) {
         const progress = Math.min((currentTime / totalDuration) * 100, 99.9);
-        const job = this.activeJobs.get(jobId);
+        const job = this.activeJobs.find((job) => job.id === jobId);
         if (job) {
           job.progress = Math.max(progress, 0);
 
