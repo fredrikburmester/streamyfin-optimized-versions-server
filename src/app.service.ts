@@ -12,7 +12,7 @@ import { promises as fsPromises } from 'fs';
 
 export interface Job {
   id: string;
-  status: 'queued' | 'running' | 'completed' | 'failed' | 'cancelled';
+  status: 'queued' | 'optimizing' | 'completed' | 'failed' | 'cancelled';
   progress: number;
   outputPath: string;
   inputUrl: string;
@@ -143,7 +143,7 @@ export class AppService {
 
   private checkQueue() {
     const runningJobs = Array.from(this.activeJobs.values()).filter(
-      (job) => job.status === 'running',
+      (job) => job.status === 'optimizing',
     ).length;
 
     while (runningJobs < this.maxConcurrentJobs && this.jobQueue.length > 0) {
@@ -157,7 +157,7 @@ export class AppService {
   private startJob(jobId: string) {
     const job = this.activeJobs.find((job) => job.id === jobId);
     if (job) {
-      job.status = 'running';
+      job.status = 'optimizing';
       const ffmpegArgs = this.getFfmpegArgs(job.inputUrl, job.outputPath);
       this.startFFmpegProcess(jobId, ffmpegArgs);
       this.logger.log(`Started job ${jobId}`);
