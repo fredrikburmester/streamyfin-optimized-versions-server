@@ -1,21 +1,18 @@
-import { AppService, Job } from './app.service';
 import {
-  Controller,
-  Get,
-  Post,
   Body,
+  Controller,
   Delete,
-  Param,
-  NotFoundException,
-  Res,
+  Get,
   Logger,
-  StreamableFile,
+  NotFoundException,
+  Param,
+  Post,
   Query,
+  Res,
 } from '@nestjs/common';
 import { Response } from 'express';
-import { basename } from 'path';
 import * as fs from 'fs';
-import * as mime from 'mime-types';
+import { AppService, Job } from './app.service';
 
 @Controller()
 export class AppController {
@@ -94,17 +91,34 @@ export class AppController {
       throw new NotFoundException('File not found or job not completed');
     }
 
-    const fileName = basename(filePath);
-    this.logger.log(`Download request for file: ${fileName}`);
+    const stat = fs.statSync(filePath);
 
-    const mimeType = mime.lookup(filePath) || 'application/octet-stream';
+    res.setHeader('Content-Length', stat.size);
+    res.setHeader('Content-Type', 'video/mp4');
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename=transcoded_${id}.mp4`,
+    );
 
-    res.set({
-      'Content-Type': mimeType,
-      'Content-Disposition': `attachment; filename="${fileName}"`,
+    const fileStream = fs.createReadStream(filePath);
+    fileStream.pipe(res);
+
+    // Wait for the file to finish sending
+    await new Promise((resolve) => {
+      res.on('finish', resolve);
     });
 
-    return new StreamableFile(fs.createReadStream(filePath));
+    // const fileName = basename(filePath);
+    // this.logger.log(`Download request for file: ${fileName}`);
+
+    // const mimeType = mime.lookup(filePath) || 'application/octet-stream';
+
+    // res.set({
+    //   'Content-Type': mimeType,
+    //   'Content-Disposition': `attachment; filename="${fileName}"`,
+    // });
+
+    // return new StreamableFile(fs.createReadStream(filePath));
   }
 
   @Delete('delete-cache')
