@@ -5,8 +5,12 @@ services:
       dockerfile: Dockerfile
     ports:
       - '3000:3000'
+    env_file:
+      - .env
     environment:
       - NODE_ENV=development
     restart: unless-stopped
-volumes:
-  node_modules:
+
+    # If you want to use a local volume for the cache, uncomment the following lines:
+    #volumes:
+    #  - /host/path/to/cache:/app/cache
