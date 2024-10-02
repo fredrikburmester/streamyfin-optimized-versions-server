@@ -12,5 +12,5 @@ services:
     restart: unless-stopped
 
     # If you want to use a local volume for the cache, uncomment the following lines:
-    #volumes:
-    #  - /host/path/to/cache:/app/cache
+    volumes:
+      - ./cache:/usr/src/app/cache
