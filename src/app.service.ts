@@ -18,9 +18,10 @@ export interface Job {
   inputUrl: string;
   deviceId: string;
   itemId: string;
-  speed?: number;
   timestamp: Date;
-  item?: any;
+  size: number;
+  item: any;
+  speed?: number;
 }
 
 @Injectable()
@@ -73,6 +74,7 @@ export class AppService {
       item,
       deviceId,
       timestamp: new Date(),
+      size: 0,
     });
 
     this.jobQueue.push(jobId);
@@ -141,6 +143,66 @@ export class AppService {
     this.videoDurations.delete(jobId);
   }
 
+  async getStatistics() {
+    const cacheSize = await this.getCacheSize();
+    const totalTranscodes = this.getTotalTranscodes();
+    const activeJobs = this.getActiveJobs();
+    const completedJobs = this.getCompletedJobs();
+    const uniqueDevices = this.getUniqueDevices();
+
+    return {
+      cacheSize,
+      totalTranscodes,
+      activeJobs,
+      completedJobs,
+      uniqueDevices,
+    };
+  }
+
+  private async getCacheSize(): Promise<string> {
+    const cacheSize = await this.getDirectorySize(this.cacheDir);
+    return this.formatSize(cacheSize);
+  }
+
+  private async getDirectorySize(directory: string): Promise<number> {
+    const files = await fs.promises.readdir(directory);
+    const stats = await Promise.all(
+      files.map((file) => fs.promises.stat(path.join(directory, file))),
+    );
+
+    return stats.reduce((accumulator, { size }) => accumulator + size, 0);
+  }
+
+  private formatSize(bytes: number): string {
+    const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+    let size = bytes;
+    let unitIndex = 0;
+
+    while (size >= 1024 && unitIndex < units.length - 1) {
+      size /= 1024;
+      unitIndex++;
+    }
+
+    return `${size.toFixed(2)} ${units[unitIndex]}`;
+  }
+
+  private getTotalTranscodes(): number {
+    return this.activeJobs.length;
+  }
+
+  private getActiveJobs(): number {
+    return this.activeJobs.filter((job) => job.status === 'optimizing').length;
+  }
+
+  private getCompletedJobs(): number {
+    return this.activeJobs.filter((job) => job.status === 'completed').length;
+  }
+
+  private getUniqueDevices(): number {
+    const devices = new Set(this.activeJobs.map((job) => job.deviceId));
+    return devices.size;
+  }
+
   private checkQueue() {
     const runningJobs = Array.from(this.activeJobs.values()).filter(
       (job) => job.status === 'optimizing',
@@ -193,7 +255,7 @@ export class AppService {
           this.updateProgress(jobId, data.toString());
         });
 
-        ffmpegProcess.on('close', (code) => {
+        ffmpegProcess.on('close', async (code) => {
           this.ffmpegProcesses.delete(jobId);
           this.videoDurations.delete(jobId);
 
@@ -207,8 +269,17 @@ export class AppService {
           if (code === 0) {
             job.status = 'completed';
             job.progress = 100;
+            // Update the file size
+            try {
+              const stats = await fsPromises.stat(job.outputPath);
+              job.size = stats.size;
+            } catch (error) {
+              this.logger.error(
+                `Error getting file size for job ${jobId}: ${error.message}`,
+              );
+            }
             this.logger.log(
-              `Job ${jobId} completed successfully. Output: ${job.outputPath}`,
+              `Job ${jobId} completed successfully. Output: ${job.outputPath}, Size: ${this.formatSize(job.size || 0)}`,
             );
             resolve();
           } else {
@@ -239,6 +310,7 @@ export class AppService {
       this.checkQueue();
     }
   }
+
   private async getVideoDuration(
     inputUrl: string,
     jobId: string,
