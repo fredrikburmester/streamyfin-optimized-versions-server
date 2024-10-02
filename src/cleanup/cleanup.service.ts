@@ -27,7 +27,7 @@ export class CleanupService {
   }
 
   private isOlderThanOneHour(timestamp: Date, now: Date): boolean {
-    const oneHourInMs = 60 * 60 * 1000;
+    const oneHourInMs = 60 * 60 * 1000 * 12;
     return now.getTime() - timestamp.getTime() > oneHourInMs;
   }
 
