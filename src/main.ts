@@ -13,7 +13,7 @@ async function bootstrap() {
   const jellyfinUrl = process.env.JELLYFIN_URL;
   try {
     await axios.get(`${jellyfinUrl}/System/Info/Public`);
-    logger.log('Successfully connected to Jellyfin server');
+    logger.log('Successfully connected to Jellyfin server: ' + jellyfinUrl);
   } catch (error) {
     logger.error(
       `Failed to connect to Jellyfin server at ${jellyfinUrl}: ${error.message}`,
