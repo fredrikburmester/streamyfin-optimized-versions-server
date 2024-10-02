@@ -21,6 +21,11 @@ export class AppController {
     private logger: Logger, // Inject Logger
   ) {}
 
+  @Get('statistics')
+  async getStatistics() {
+    return this.appService.getStatistics();
+  }
+
   @Post('optimize-version')
   async downloadAndCombine(
     @Body('url') url: string,
