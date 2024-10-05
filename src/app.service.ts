@@ -143,6 +143,10 @@ export class AppService {
     this.videoDurations.delete(jobId);
   }
 
+  getMaxConcurrentJobs(): number {
+    return this.maxConcurrentJobs;
+  }
+
   async getStatistics() {
     const cacheSize = await this.getCacheSize();
     const totalTranscodes = this.getTotalTranscodes();
@@ -157,6 +161,17 @@ export class AppService {
       completedJobs,
       uniqueDevices,
     };
+  }
+
+  async manuallyStartJob(jobId: string): Promise<boolean> {
+    const job = this.activeJobs.find((job) => job.id === jobId);
+
+    if (!job || job.status !== 'queued') {
+      return false;
+    }
+
+    this.startJob(jobId);
+    return true;
   }
 
   private async getCacheSize(): Promise<string> {

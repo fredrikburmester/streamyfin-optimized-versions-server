@@ -9,6 +9,8 @@ import {
   Post,
   Query,
   Res,
+  HttpException,
+  HttpStatus,
 } from '@nestjs/common';
 import { Response } from 'express';
 import * as fs from 'fs';
@@ -18,7 +20,7 @@ import { AppService, Job } from './app.service';
 export class AppController {
   constructor(
     private readonly appService: AppService,
-    private logger: Logger, // Inject Logger
+    private logger: Logger,
   ) {}
 
   @Get('statistics')
@@ -66,6 +68,25 @@ export class AppController {
   @Get('job-status/:id')
   async getActiveJob(@Param('id') id: string): Promise<Job | null> {
     return this.appService.getJobStatus(id);
+  }
+
+  @Post('start-job/:id')
+  async startJob(@Param('id') id: string): Promise<{ message: string }> {
+    this.logger.log(`Manual start request for job: ${id}`);
+
+    try {
+      const result = await this.appService.manuallyStartJob(id);
+      if (result) {
+        return { message: 'Job started successfully' };
+      } else {
+        throw new HttpException(
+          'Job not found or already started',
+          HttpStatus.BAD_REQUEST,
+        );
+      }
+    } catch (error) {
+      throw new HttpException(error.message, HttpStatus.INTERNAL_SERVER_ERROR);
+    }
   }
 
   @Delete('cancel-job/:id')
