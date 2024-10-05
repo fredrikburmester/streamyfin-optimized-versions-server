@@ -1,8 +1,6 @@
 services:
   app:
-    build:
-      context: .
-      dockerfile: Dockerfile
+    image: fredrikburmester/streamyfin-optimized-versions-server:master
     ports:
       - '3000:3000'
     env_file:
