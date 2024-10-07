@@ -12,6 +12,8 @@ The download in the app becomed a 2 step process.
 
 ## Usage
 
+Note: The server works best if it's on the same server as the Jellyfin server.
+
 ### Docker-compose
 
 #### Docker-compose example
