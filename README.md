@@ -1,7 +1,10 @@
-# Optimized versions
+# Optimized versions (Deprecated) 
 > A streamyfin companion server for better downloads
 
 ## About
+
+⚠️ **Deprecated since Streamyfin 0.30.2**  
+> This server is no longer needed and may not work with current versions of Streamyfin. 
 
 Optimized versions is a transcoding server (henceforth refered to as _the server_). It acts as a middleman between the Jellyfin server and the client (Streamyfin app) when downloading content. The job of the server is to combine an HLS stream into a single video file which in turn enables better and more stable downloads in the app. Streamyfin can then also utilize background downloads, which means that the app does not need to be open for the content to download. 
 
