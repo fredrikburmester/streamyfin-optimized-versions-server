@@ -2,6 +2,7 @@ import {
   Injectable,
   InternalServerErrorException,
   Logger,
+  NotFoundException,
 } from '@nestjs/common';
 import { ChildProcess, spawn } from 'child_process';
 import { v4 as uuidv4 } from 'uuid';
@@ -12,6 +13,9 @@ import { promises as fsPromises } from 'fs';
 import { CACHE_DIR } from './constants';
 import { FileRemoval } from './cleanup/removalUtils';
 import * as kill from 'tree-kill';
+import { Get } from '@nestjs/common';
+import { Param } from '@nestjs/common';
+import * as crypto from 'crypto';
 
 export interface Job {
   id: string;
@@ -25,6 +29,13 @@ export interface Job {
   size: number;
   item: any;
   speed?: number;
+  checksum?: string;
+}
+
+export interface RangeRequest {
+  start: number;
+  end: number;
+  total: number;
 }
 
 @Injectable()
@@ -45,6 +56,7 @@ export class AppService {
     private readonly fileRemoval: FileRemoval
 
   ) {
+    this.logger = new Logger('Job');
     this.cacheDir = CACHE_DIR;
     this.maxConcurrentJobs = this.configService.get<number>(
       'MAX_CONCURRENT_JOBS',
@@ -181,7 +193,7 @@ export class AppService {
     if (job) {
       job.status = 'ready-for-removal';
       job.timestamp = new Date()
-      this.logger.log(`Job ${jobId} marked as completed and ready for removal.`);
+      this.logger.log(`Job ${jobId} was cancelled or marked as completed and is ready for removal.`);
     } else {
       this.logger.warn(`Job ${jobId} not found. Cannot mark as completed.`);
     }
@@ -407,16 +419,19 @@ export class AppService {
           }
 
           if (code === 0) {
-            
             job.status = 'completed';
             job.progress = 100;
-            // Update the file size
+            // Update the file size and calculate checksum
             try {
               const stats = await fsPromises.stat(job.outputPath);
               job.size = stats.size;
+              const { isValid, checksum } = await this.validateFileIntegrity(job.outputPath, stats.size);
+              if (isValid) {
+                job.checksum = checksum;
+              }
             } catch (error) {
               this.logger.error(
-                `Error getting file size for job ${jobId}: ${error.message}`,
+                `Error getting file size and checksum for job ${jobId}: ${error.message}`,
               );
             }
             this.logger.log(
@@ -508,6 +523,62 @@ export class AppService {
           }
         }
       }
+    }
+  }
+
+  /**
+   * Parse HTTP Range header
+   */
+  public parseRangeHeader(rangeHeader: string, fileSize: number): RangeRequest | null {
+    if (!rangeHeader) return null;
+    
+    const matches = rangeHeader.match(/bytes=(\d+)-(\d+)?/);
+    if (!matches) return null;
+    
+    const start = parseInt(matches[1], 10);
+    const end = matches[2] ? parseInt(matches[2], 10) : fileSize - 1;
+    
+    return {
+      start,
+      end: Math.min(end, fileSize - 1),
+      total: fileSize
+    };
+  }
+
+  /**
+   * Calculate SHA-256 checksum for a file
+   */
+  public async calculateFileChecksum(filePath: string): Promise<string> {
+    return new Promise((resolve, reject) => {
+      const hash = crypto.createHash('sha256');
+      const stream = fs.createReadStream(filePath);
+      
+      stream.on('error', err => reject(err));
+      stream.on('data', chunk => hash.update(chunk));
+      stream.on('end', () => resolve(hash.digest('hex')));
+    });
+  }
+
+  /**
+   * Validate file integrity
+   */
+  public async validateFileIntegrity(filePath: string, expectedSize: number): Promise<{ isValid: boolean; checksum: string }> {
+    try {
+      const stats = await fsPromises.stat(filePath);
+      
+      // Check file size
+      if (stats.size !== expectedSize) {
+        this.logger.error(`File size mismatch for ${filePath}. Expected: ${expectedSize}, Got: ${stats.size}`);
+        return { isValid: false, checksum: '' };
+      }
+
+      // Calculate checksum
+      const checksum = await this.calculateFileChecksum(filePath);
+      
+      return { isValid: true, checksum };
+    } catch (error) {
+      this.logger.error(`Error validating file integrity for ${filePath}: ${error.message}`);
+      return { isValid: false, checksum: '' };
     }
   }
 }

@@ -11,18 +11,25 @@ import {
   Res,
   HttpException,
   HttpStatus,
+  Headers,
 } from '@nestjs/common';
 import { Response } from 'express';
 import * as fs from 'fs';
 import { AppService, Job } from './app.service';
 import { log } from 'console';
 
+interface RangeRequest {
+  start: number;
+  end: number;
+  total: number;
+}
+
 @Controller()
 export class AppController {
   constructor(
     private readonly appService: AppService,
     private logger: Logger,
-  ) {}
+  ) { this.logger = new Logger('ApiRequest'); }
 
   @Get('statistics')
   async getStatistics() {
@@ -110,6 +117,7 @@ export class AppController {
   @Get('download/:id')
   async downloadTranscodedFile(
     @Param('id') id: string,
+    @Headers('range') rangeHeader: string,
     @Res({ passthrough: true }) res: Response,
   ) {
     const filePath = this.appService.getTranscodedFilePath(id);
@@ -119,35 +127,71 @@ export class AppController {
     }
 
     const stat = fs.statSync(filePath);
+    const range = this.appService.parseRangeHeader(rangeHeader, stat.size);
 
-    res.setHeader('Content-Length', stat.size);
-    res.setHeader('Content-Type', 'video/mp4');
-    res.setHeader(
-      'Content-Disposition',
-      `attachment; filename=transcoded_${id}.mp4`,
-    );
+    // Validate file integrity before sending
+    const { isValid, checksum } = await this.appService.validateFileIntegrity(filePath, stat.size);
+    if (!isValid) {
+      throw new HttpException('File integrity check failed', HttpStatus.INTERNAL_SERVER_ERROR);
+    }
 
-    const fileStream = fs.createReadStream(filePath);
-    this.logger.log(`Download started for ${filePath}`)
+    // Add checksum to response headers
+    res.setHeader('X-File-Checksum', checksum);
+    res.setHeader('X-File-Size', stat.size);
 
-    return new Promise((resolve, reject) => {
-      fileStream.pipe(res);
-
-      fileStream.on('end', () => {
-        // File transfer completed
-        this.logger.log(`File transfer ended for: ${filePath}`)
-        
-        resolve(null);
+    if (range) {
+      // Handle partial content request
+      res.status(206);
+      res.setHeader('Content-Range', `bytes ${range.start}-${range.end}/${range.total}`);
+      res.setHeader('Content-Length', range.end - range.start + 1);
+      res.setHeader('Accept-Ranges', 'bytes');
+      res.setHeader('Content-Type', 'video/mp4');
+      
+      const fileStream = fs.createReadStream(filePath, {
+        start: range.start,
+        end: range.end
       });
+      
+      this.logger.log(`Partial download started for ${filePath}`);
 
-      fileStream.on('error', (err) => {
-        // Handle errors during file streaming
-        this.logger.error(`Error streaming file ${filePath}: ${err.message}`);
-        reject(err);
+      return new Promise((resolve, reject) => {
+        fileStream.pipe(res);
+        fileStream.on('end', () => {
+          this.logger.log(`Partial download completed for ${filePath}`);
+          if (range.end === stat.size - 1) {
+            this.logger.log(`Download completed for ${filePath}`);
+            this.appService.completeJob(id);
+          }
+          resolve(null);
+        });
+        fileStream.on('error', (err) => {
+          this.logger.error(`Error streaming partial file ${filePath}: ${err.message}`);
+          reject(err);
+        });
       });
-    });
+    } else {
+      // Handle full file request
+      res.setHeader('Content-Length', stat.size);
+      res.setHeader('Content-Type', 'video/mp4');
+      res.setHeader('Accept-Ranges', 'bytes');
+      
+      this.logger.log(`Full download started for ${filePath}`);
+
+      const fileStream = fs.createReadStream(filePath);
+      return new Promise((resolve, reject) => {
+        fileStream.pipe(res);
+        fileStream.on('end', () => {
+          this.logger.log(`Full download completed for ${filePath}`);
+          this.appService.cancelJob(id);
+          resolve(null);
+        });
+        fileStream.on('error', (err) => {
+          this.logger.error(`Error streaming file ${filePath}: ${err.message}`);
+          reject(err);
+        });
+      });
+    }
   }
-
 
   @Delete('delete-cache')
   async deleteCache() {

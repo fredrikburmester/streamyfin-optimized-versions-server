@@ -13,13 +13,21 @@ The download in the app becomed a 2 step process.
 1. Optimize
 2. Download
 
-## Usage
+## Features
+
+- **Video Optimization**: Transcode videos to optimal formats and bitrates
+- **Partial Downloads**: Support for HTTP Range requests for efficient streaming
+- **File Integrity**: SHA-256 checksum verification for downloaded files
+- **Job Management**: Queue and track video optimization jobs
+- **Cache Management**: Efficient caching system with automatic cleanup
+- **Statistics**: Monitor server performance and usage metrics
+
 
 Note: The server works best if it's on the same server as the Jellyfin server.
 
 ### Docker-compose
 
-#### Docker-compose example
+## Installation using Docker-compose (example)
 
 ```yaml
 services:
@@ -60,6 +68,23 @@ In the meantime, the app will poll the server for the progress of the optimize.
 As soon as the server is finished with the conversion the app (if open) will start downloading the video file. If the app is not open the download will start as soon as the app is opened. After the download has started the app can be minimized. 
 
 This means that the user needs to 1. initiate the download, and 2. open the app once before download. 
+
+### 3. File Transfer Validation
+
+The server implements several validation mechanisms to ensure reliable downloads, it run the checks and then hashes the item using SHA256.
+
+## API Endpoints
+
+- `POST /optimize-version`: Start a new optimization job
+- `POST /start-job/:id`: Manually start a queued optimization job
+- `GET /download/:id`: Download a transcoded file
+- `GET /job-status/:id`: Check job status
+- `GET /all-jobs `: Check all jobs status
+- `DELETE /cancel-job/:id`: Cancel a job
+- `GET /statistics`: Get server statistics
+- `DELETE /delete-cache`: Clear the cache
+
+For detailed API documentation, see [API Documentation](API_DOCUMENTATION.md).
 
 ## Other
 
